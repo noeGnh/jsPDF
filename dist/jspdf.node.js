@@ -1,7 +1,7 @@
 /** @license
  *
  * jsPDF - PDF Document creation from JavaScript
- * Version 2.4.0 Built on 2021-09-14T10:30:30.230Z
+ * Version 2.4.0 Built on 2021-12-08T13:13:23.308Z
  *                      CommitID 00000000
  *
  * Copyright (c) 2010-2021 James Hall <james@parall.ax>, https://github.com/MrRio/jsPDF
@@ -4048,7 +4048,11 @@ function jsPDF(options) {
       scaleFactor = 6;
       break;
     default:
-      throw new Error("Invalid unit: " + unit);
+      if (typeof unit === "number") {
+        scaleFactor = unit;
+      } else {
+        throw new Error("Invalid unit: " + unit);
+      }
   }
 
   var encryption = null;
@@ -4220,6 +4224,7 @@ function jsPDF(options) {
    * @param {number|Matrix} [options.angle=0] - Rotate the text clockwise or counterclockwise. Expects the angle in degree.
    * @param {number} [options.rotationDirection=1] - Direction of the rotation. 0 = clockwise, 1 = counterclockwise.
    * @param {number} [options.charSpace=0] - The space between each letter.
+   * @param {number} [options.horizontalScale=1] - Horizontal scale of the text as a factor of the regular size.
    * @param {number} [options.lineHeightFactor=1.15] - The lineheight of each line.
    * @param {Object} [options.flags] - Flags for to8bitStream.
    * @param {boolean} [options.flags.noBOM=true] - Don't add BOM to Unicode-text.
@@ -4256,7 +4261,7 @@ function jsPDF(options) {
      */
     options = options || {};
     var scope = options.scope || this;
-    var payload, da, angle, align, charSpace, maxWidth, flags;
+    var payload, da, angle, align, charSpace, maxWidth, flags, horizontalScale;
 
     // Pre-August-2012 the order of arguments was function(x, y, text, flags)
     // in effort to make all calls have similar signature like
@@ -4432,7 +4437,8 @@ function jsPDF(options) {
 
     //baseline
     var height = activeFontSize / scope.internal.scaleFactor;
-    var descent = height * (lineHeightFactor - 1);
+    var descent = height * (lineHeight - 1);
+
     switch (options.baseline) {
       case "bottom":
         y -= descent;
@@ -4515,6 +4521,11 @@ function jsPDF(options) {
     if (typeof charSpace !== "undefined") {
       xtra += hpf(scale(charSpace)) + " Tc\n";
       this.setCharSpace(this.getCharSpace() || 0);
+    }
+
+    horizontalScale = options.horizontalScale;
+    if (typeof horizontalScale !== "undefined") {
+      xtra += hpf(horizontalScale * 100) + " Tz\n";
     }
 
     //lang
@@ -7033,6 +7044,11 @@ var calculateX = function(formObject, text) {
       : text;
   // split into array of words
   var textSplit = text.split(" ");
+  if (formObject.multiline) {
+    textSplit = textSplit.map(word => word.split("\n"));
+  } else {
+    textSplit = textSplit.map(word => [word]);
+  }
 
   var fontSize = maxFontSize; // The Starting fontSize (The Maximum)
   var lineSpacing = 2;
@@ -7045,7 +7061,7 @@ var calculateX = function(formObject, text) {
 
   var isSmallerThanWidth = function(i, lastLine, fontSize) {
     if (i + 1 < textSplit.length) {
-      var tmp = lastLine + " " + textSplit[i + 1];
+      var tmp = lastLine + " " + textSplit[i + 1][0];
       var TextWidth = calculateFontSpace(tmp, formObject, fontSize).width;
       var FieldWidth = width - 2 * borderPadding;
       return TextWidth <= FieldWidth;
@@ -7069,6 +7085,7 @@ var calculateX = function(formObject, text) {
     var firstWordInLine = 0,
       lastWordInLine = 0;
     var lastLength;
+    var currWord = 0;
 
     if (fontSize <= 0) {
       // In case, the Text doesn't fit at all
@@ -7085,51 +7102,81 @@ var calculateX = function(formObject, text) {
 
     var lastLine = "";
     var lineCount = 0;
-    Line: for (var i in textSplit) {
+    Line: for (var i = 0; i < textSplit.length; i++) {
       if (textSplit.hasOwnProperty(i)) {
-        lastLine += textSplit[i] + " ";
-        // Remove last blank
-        lastLine =
-          lastLine.substr(lastLine.length - 1) == " "
-            ? lastLine.substr(0, lastLine.length - 1)
-            : lastLine;
-        var key = parseInt(i);
-        var nextLineIsSmaller = isSmallerThanWidth(key, lastLine, fontSize);
-        var isLastWord = i >= textSplit.length - 1;
-        if (nextLineIsSmaller && !isLastWord) {
-          lastLine += " ";
-          continue; // Line
-        } else if (!nextLineIsSmaller && !isLastWord) {
-          if (!formObject.multiline) {
+        let isWithNewLine = false;
+        if (textSplit[i].length !== 1 && currWord !== textSplit[i].length - 1) {
+          if (
+            (textHeight + lineSpacing) * (lineCount + 2) + lineSpacing >
+            height
+          ) {
             continue FontSize;
+          }
+
+          lastLine += textSplit[i][currWord];
+          isWithNewLine = true;
+          lastWordInLine = i;
+          i--;
+        } else {
+          lastLine += textSplit[i][currWord] + " ";
+          lastLine =
+            lastLine.substr(lastLine.length - 1) == " "
+              ? lastLine.substr(0, lastLine.length - 1)
+              : lastLine;
+          var key = parseInt(i);
+          var nextLineIsSmaller = isSmallerThanWidth(key, lastLine, fontSize);
+          var isLastWord = i >= textSplit.length - 1;
+
+          if (nextLineIsSmaller && !isLastWord) {
+            lastLine += " ";
+            currWord = 0;
+            continue; // Line
+          } else if (!nextLineIsSmaller && !isLastWord) {
+            if (!formObject.multiline) {
+              continue FontSize;
+            } else {
+              if (
+                (textHeight + lineSpacing) * (lineCount + 2) + lineSpacing >
+                height
+              ) {
+                // If the Text is higher than the
+                // FieldObject
+                continue FontSize;
+              }
+              lastWordInLine = key;
+              // go on
+            }
+          } else if (isLastWord) {
+            lastWordInLine = key;
           } else {
             if (
+              formObject.multiline &&
               (textHeight + lineSpacing) * (lineCount + 2) + lineSpacing >
-              height
+                height
             ) {
-              // If the Text is higher than the
-              // FieldObject
+              // If the Text is higher than the FieldObject
               continue FontSize;
             }
-            lastWordInLine = key;
-            // go on
-          }
-        } else if (isLastWord) {
-          lastWordInLine = key;
-        } else {
-          if (
-            formObject.multiline &&
-            (textHeight + lineSpacing) * (lineCount + 2) + lineSpacing > height
-          ) {
-            // If the Text is higher than the FieldObject
-            continue FontSize;
           }
         }
+        // Remove last blank
 
         var line = "";
 
         for (var x = firstWordInLine; x <= lastWordInLine; x++) {
-          line += textSplit[x] + " ";
+          var currLine = textSplit[x];
+          if (formObject.multiline) {
+            if (x === lastWordInLine) {
+              line += currLine[currWord] + " ";
+              currWord = (currWord + 1) % currLine.length;
+              continue;
+            }
+            if (x === firstWordInLine) {
+              line += currLine[currLine.length - 1] + " ";
+              continue;
+            }
+          }
+          line += currLine[0] + " ";
         }
 
         // Remove last blank
@@ -7163,7 +7210,7 @@ var calculateX = function(formObject, text) {
 
         // Reset for next iteration step
         lastLength = 0;
-        firstWordInLine = lastWordInLine + 1;
+        firstWordInLine = isWithNewLine ? lastWordInLine : lastWordInLine + 1;
         lineCount++;
 
         lastLine = "";
@@ -11267,21 +11314,35 @@ var AcroForm = jsPDF.AcroForm;
    * @returns {number} width the width of the text/link
    */
   jsPDFAPI.textWithLink = function(text, x, y, options) {
-    var width = this.getTextWidth(text);
-    var height = this.internal.getLineHeight() / this.internal.scaleFactor;
+    var totalLineWidth = this.getTextWidth(text);
+    var lineHeight = this.internal.getLineHeight() / this.internal.scaleFactor;
+    var linkHeight, linkWidth;
+
+    // Checking if maxWidth option is passed to determine lineWidth and number of lines for each line
+    if (options.maxWidth !== undefined) {
+      var { maxWidth } = options;
+      linkWidth = maxWidth;
+      var numOfLines = this.splitTextToSize(text, linkWidth).length;
+      linkHeight = Math.ceil(lineHeight * numOfLines);
+    } else {
+      linkWidth = totalLineWidth;
+      linkHeight = lineHeight;
+    }
+
     this.text(text, x, y, options);
+
     //TODO We really need the text baseline height to do this correctly.
     // Or ability to draw text on top, bottom, center, or baseline.
-    y += height * 0.2;
+    y += lineHeight * 0.2;
     //handle x position based on the align option
     if (options.align === "center") {
-      x = x - width / 2; //since starting from center move the x position by half of text width
+      x = x - totalLineWidth / 2; //since starting from center move the x position by half of text width
     }
     if (options.align === "right") {
-      x = x - width;
+      x = x - totalLineWidth;
     }
-    this.link(x, y - height, width, height, options);
-    return width;
+    this.link(x, y - lineHeight, linkWidth, linkHeight, options);
+    return totalLineWidth;
   };
 
   //TODO move into external library
@@ -13750,20 +13811,9 @@ function parseFontFamily(input) {
           typeof this.path[i + 1].x === "number"
         ) {
           pathBegin = new Point(this.path[i + 1].x, this.path[i + 1].y);
-          this.path.push({
-            type: "lt",
-            x: pathBegin.x,
-            y: pathBegin.y
-          });
           break;
         }
       }
-    }
-    if (
-      typeof this.path[i + 2] === "object" &&
-      typeof this.path[i + 2].x === "number"
-    ) {
-      this.path.push(JSON.parse(JSON.stringify(this.path[i + 2])));
     }
     this.path.push({
       type: "close"
@@ -14908,7 +14958,7 @@ function parseFontFamily(input) {
 
         case "lt":
           var iii = moves.length;
-          if (!isNaN(xPath[i - 1].x)) {
+          if (xPath[i - 1] && !isNaN(xPath[i - 1].x)) {
             delta = [pt.x - xPath[i - 1].x, pt.y - xPath[i - 1].y];
             if (iii > 0) {
               for (iii; iii >= 0; iii--) {
@@ -14979,6 +15029,7 @@ function parseFontFamily(input) {
       style = null;
     }
 
+    var began = false;
     for (var k = 0; k < moves.length; k++) {
       if (moves[k].arc) {
         var arcs = moves[k].abs;
@@ -14996,21 +15047,22 @@ function parseFontFamily(input) {
               arc.endAngle,
               arc.counterclockwise,
               undefined,
-              isClip
+              isClip,
+              !began
             );
           } else {
             drawLine.call(this, arc.x, arc.y);
           }
+          began = true;
         }
-        putStyle.call(this, style);
+      } else if (moves[k].close === true) {
         this.pdf.internal.out("h");
-      }
-      if (!moves[k].arc) {
-        if (moves[k].close !== true && moves[k].begin !== true) {
-          var x = moves[k].start.x;
-          var y = moves[k].start.y;
-          drawLines.call(this, moves[k].deltas, x, y);
-        }
+        began = false;
+      } else if (moves[k].begin !== true) {
+        var x = moves[k].start.x;
+        var y = moves[k].start.y;
+        drawLines.call(this, moves[k].deltas, x, y);
+        began = true;
       }
     }
 
@@ -15088,13 +15140,28 @@ function parseFontFamily(input) {
    * @param style
    * @param isClip
    */
-  var drawArc = function(x, y, r, a1, a2, counterclockwise, style, isClip) {
+  var drawArc = function(
+    x,
+    y,
+    r,
+    a1,
+    a2,
+    counterclockwise,
+    style,
+    isClip,
+    includeMove
+  ) {
+    // http://hansmuller-flex.blogspot.com/2011/10/more-about-approximating-circular-arcs.html
     var curves = createArc.call(this, r, a1, a2, counterclockwise);
 
     for (var i = 0; i < curves.length; i++) {
       var curve = curves[i];
-      if ( i === 0) {
-        doMove.call(this, curve.x1 + x, curve.y1 + y);
+      if (i === 0) {
+        if (includeMove) {
+          doMove.call(this, curve.x1 + x, curve.y1 + y);
+        } else {
+          drawLine.call(this, curve.x1 + x, curve.y1 + y);
+        }
       }
       drawCurve.call(
         this,
@@ -15822,1080 +15889,1078 @@ function parseFontFamily(input) {
   }
 })(jsPDF.API);
 
-/**
- * @license
- * Copyright (c) 2018 Erik Koopmans
- * Released under the MIT License.
- *
- * Licensed under the MIT License.
- * http://opensource.org/licenses/mit-license
- */
-
-/**
- * jsPDF html PlugIn
- *
- * @name html
- * @module
- */
-(function(jsPDFAPI) {
-
-  function loadHtml2Canvas() {
-    return (function() {
-      if (globalObject["html2canvas"]) {
-        return Promise.resolve(globalObject["html2canvas"]);
-      }
-
-
-      if (typeof exports === "object" && typeof module !== "undefined") {
-        return new Promise(function(resolve, reject) {
-          try {
-            resolve(require("html2canvas"));
-          } catch (e) {
-            reject(e);
-          }
-        });
-      }
-      if (typeof define === "function" && define.amd) {
-        return new Promise(function(resolve, reject) {
-          try {
-            require(["html2canvas"], resolve);
-          } catch (e) {
-            reject(e);
-          }
-        });
-      }
-      return Promise.reject(new Error("Could not load html2canvas"));
-    })()
-      .catch(function(e) {
-        return Promise.reject(new Error("Could not load html2canvas: " + e));
-      })
-      .then(function(html2canvas) {
-        return html2canvas.default ? html2canvas.default : html2canvas;
-      });
-  }
-
-  function loadDomPurify() {
-    return (function() {
-      if (globalObject["DOMPurify"]) {
-        return Promise.resolve(globalObject["DOMPurify"]);
-      }
-
-
-      if (typeof exports === "object" && typeof module !== "undefined") {
-        return new Promise(function(resolve, reject) {
-          try {
-            resolve(require("dompurify"));
-          } catch (e) {
-            reject(e);
-          }
-        });
-      }
-      if (typeof define === "function" && define.amd) {
-        return new Promise(function(resolve, reject) {
-          try {
-            require(["dompurify"], resolve);
-          } catch (e) {
-            reject(e);
-          }
-        });
-      }
-      return Promise.reject(new Error("Could not load dompurify"));
-    })()
-      .catch(function(e) {
-        return Promise.reject(new Error("Could not load dompurify: " + e));
-      })
-      .then(function(dompurify) {
-        return dompurify.default ? dompurify.default : dompurify;
-      });
-  }
-
-  /**
-   * Determine the type of a variable/object.
-   *
-   * @private
-   * @ignore
-   */
-  var objType = function(obj) {
-    var type = typeof obj;
-    if (type === "undefined") return "undefined";
-    else if (type === "string" || obj instanceof String) return "string";
-    else if (type === "number" || obj instanceof Number) return "number";
-    else if (type === "function" || obj instanceof Function) return "function";
-    else if (!!obj && obj.constructor === Array) return "array";
-    else if (obj && obj.nodeType === 1) return "element";
-    else if (type === "object") return "object";
-    else return "unknown";
-  };
-
-  /**
-   * Create an HTML element with optional className, innerHTML, and style.
-   *
-   * @private
-   * @ignore
-   */
-  var createElement = function(tagName, opt) {
-    var el = document.createElement(tagName);
-    if (opt.className) el.className = opt.className;
-    if (opt.innerHTML && opt.dompurify) {
-      el.innerHTML = opt.dompurify.sanitize(opt.innerHTML);
-    }
-    for (var key in opt.style) {
-      el.style[key] = opt.style[key];
-    }
-    return el;
-  };
-
-  /**
-   * Deep-clone a node and preserve contents/properties.
-   *
-   * @private
-   * @ignore
-   */
-  var cloneNode = function(node, javascriptEnabled) {
-    // Recursively clone the node.
-    var clone =
-      node.nodeType === 3
-        ? document.createTextNode(node.nodeValue)
-        : node.cloneNode(false);
-    for (var child = node.firstChild; child; child = child.nextSibling) {
-      if (
-        javascriptEnabled === true ||
-        child.nodeType !== 1 ||
-        child.nodeName !== "SCRIPT"
-      ) {
-        clone.appendChild(cloneNode(child, javascriptEnabled));
-      }
-    }
-
-    if (node.nodeType === 1) {
-      // Preserve contents/properties of special nodes.
-      if (node.nodeName === "CANVAS") {
-        clone.width = node.width;
-        clone.height = node.height;
-        clone.getContext("2d").drawImage(node, 0, 0);
-      } else if (node.nodeName === "TEXTAREA" || node.nodeName === "SELECT") {
-        clone.value = node.value;
-      }
-
-      // Preserve the node's scroll position when it loads.
-      clone.addEventListener(
-        "load",
-        function() {
-          clone.scrollTop = node.scrollTop;
-          clone.scrollLeft = node.scrollLeft;
-        },
-        true
-      );
-    }
-
-    // Return the cloned node.
-    return clone;
-  };
-
-  /* ----- CONSTRUCTOR ----- */
-
-  var Worker = function Worker(opt) {
-    // Create the root parent for the proto chain, and the starting Worker.
-    var root = Object.assign(
-      Worker.convert(Promise.resolve()),
-      JSON.parse(JSON.stringify(Worker.template))
-    );
-    var self = Worker.convert(Promise.resolve(), root);
-
-    // Set progress, optional settings, and return.
-    self = self.setProgress(1, Worker, 1, [Worker]);
-    self = self.set(opt);
-    return self;
-  };
-
-  // Boilerplate for subclassing Promise.
-  Worker.prototype = Object.create(Promise.prototype);
-  Worker.prototype.constructor = Worker;
-
-  // Converts/casts promises into Workers.
-  Worker.convert = function convert(promise, inherit) {
-    // Uses prototypal inheritance to receive changes made to ancestors' properties.
-    promise.__proto__ = inherit || Worker.prototype;
-    return promise;
-  };
-
-  Worker.template = {
-    prop: {
-      src: null,
-      container: null,
-      overlay: null,
-      canvas: null,
-      img: null,
-      pdf: null,
-      pageSize: null,
-      callback: function() {}
-    },
-    progress: {
-      val: 0,
-      state: null,
-      n: 0,
-      stack: []
-    },
-    opt: {
-      filename: "file.pdf",
-      margin: [0, 0, 0, 0],
-      enableLinks: true,
-      x: 0,
-      y: 0,
-      html2canvas: {},
-      jsPDF: {},
-      backgroundColor: "transparent"
-    }
-  };
-
-  /* ----- FROM / TO ----- */
-
-  Worker.prototype.from = function from(src, type) {
-    function getType(src) {
-      switch (objType(src)) {
-        case "string":
-          return "string";
-        case "element":
-          return src.nodeName.toLowerCase() === "canvas" ? "canvas" : "element";
-        default:
-          return "unknown";
-      }
-    }
-
-    return this.then(function from_main() {
-      type = type || getType(src);
-      switch (type) {
-        case "string":
-          return this.then(loadDomPurify).then(function(dompurify) {
-            return this.set({
-              src: createElement("div", {
-                innerHTML: src,
-                dompurify: dompurify
-              })
-            });
-          });
-        case "element":
-          return this.set({ src: src });
-        case "canvas":
-          return this.set({ canvas: src });
-        case "img":
-          return this.set({ img: src });
-        default:
-          return this.error("Unknown source type.");
-      }
-    });
-  };
-
-  Worker.prototype.to = function to(target) {
-    // Route the 'to' request to the appropriate method.
-    switch (target) {
-      case "container":
-        return this.toContainer();
-      case "canvas":
-        return this.toCanvas();
-      case "img":
-        return this.toImg();
-      case "pdf":
-        return this.toPdf();
-      default:
-        return this.error("Invalid target.");
-    }
-  };
-
-  Worker.prototype.toContainer = function toContainer() {
-    // Set up function prerequisites.
-    var prereqs = [
-      function checkSrc() {
-        return (
-          this.prop.src || this.error("Cannot duplicate - no source HTML.")
-        );
-      },
-      function checkPageSize() {
-        return this.prop.pageSize || this.setPageSize();
-      }
-    ];
-    return this.thenList(prereqs).then(function toContainer_main() {
-      // Define the CSS styles for the container and its overlay parent.
-      var overlayCSS = {
-        position: "fixed",
-        overflow: "hidden",
-        zIndex: 1000,
-        left: "-100000px",
-        right: 0,
-        bottom: 0,
-        top: 0
-      };
-      var containerCSS = {
-        position: "relative",
-        display: "inline-block",
-        width:
-          (typeof this.opt.width === "number" &&
-          !isNaN(this.opt.width) &&
-          typeof this.opt.windowWidth === "number" &&
-          !isNaN(this.opt.windowWidth)
-            ? this.opt.windowWidth
-            : Math.max(
-                this.prop.src.clientWidth,
-                this.prop.src.scrollWidth,
-                this.prop.src.offsetWidth
-              )) + "px",
-        left: 0,
-        right: 0,
-        top: 0,
-        margin: "auto",
-        backgroundColor: this.opt.backgroundColor
-      }; // Set the overlay to hidden (could be changed in the future to provide a print preview).
-
-      var source = cloneNode(
-        this.prop.src,
-        this.opt.html2canvas.javascriptEnabled
-      );
-
-      if (source.tagName === "BODY") {
-        containerCSS.height =
-          Math.max(
-            document.body.scrollHeight,
-            document.body.offsetHeight,
-            document.documentElement.clientHeight,
-            document.documentElement.scrollHeight,
-            document.documentElement.offsetHeight
-          ) + "px";
-      }
-
-      this.prop.overlay = createElement("div", {
-        className: "html2pdf__overlay",
-        style: overlayCSS
-      });
-      this.prop.container = createElement("div", {
-        className: "html2pdf__container",
-        style: containerCSS
-      });
-      this.prop.container.appendChild(source);
-      this.prop.container.firstChild.appendChild(
-        createElement("div", {
-          style: {
-            clear: "both",
-            border: "0 none transparent",
-            margin: 0,
-            padding: 0,
-            height: 0
-          }
-        })
-      );
-      this.prop.container.style.float = "none";
-      this.prop.overlay.appendChild(this.prop.container);
-      document.body.appendChild(this.prop.overlay);
-      this.prop.container.firstChild.style.position = "relative";
-      this.prop.container.height =
-        Math.max(
-          this.prop.container.firstChild.clientHeight,
-          this.prop.container.firstChild.scrollHeight,
-          this.prop.container.firstChild.offsetHeight
-        ) + "px";
-    });
-  };
-
-  Worker.prototype.toCanvas = function toCanvas() {
-    // Set up function prerequisites.
-    var prereqs = [
-      function checkContainer() {
-        return (
-          document.body.contains(this.prop.container) || this.toContainer()
-        );
-      }
-    ];
-
-    // Fulfill prereqs then create the canvas.
-    return this.thenList(prereqs)
-      .then(loadHtml2Canvas)
-      .then(function toCanvas_main(html2canvas) {
-        // Handle old-fashioned 'onrendered' argument.
-        var options = Object.assign({}, this.opt.html2canvas);
-        delete options.onrendered;
-
-        return html2canvas(this.prop.container, options);
-      })
-      .then(function toCanvas_post(canvas) {
-        // Handle old-fashioned 'onrendered' argument.
-        var onRendered = this.opt.html2canvas.onrendered || function() {};
-        onRendered(canvas);
-
-        this.prop.canvas = canvas;
-        document.body.removeChild(this.prop.overlay);
-      });
-  };
-
-  Worker.prototype.toContext2d = function toContext2d() {
-    // Set up function prerequisites.
-    var prereqs = [
-      function checkContainer() {
-        return (
-          document.body.contains(this.prop.container) || this.toContainer()
-        );
-      }
-    ];
-
-    // Fulfill prereqs then create the canvas.
-    return this.thenList(prereqs)
-      .then(loadHtml2Canvas)
-      .then(function toContext2d_main(html2canvas) {
-        // Handle old-fashioned 'onrendered' argument.
-
-        var pdf = this.opt.jsPDF;
-        var fontFaces = this.opt.fontFaces;
-
-        var scale =
-          typeof this.opt.width === "number" &&
-          !isNaN(this.opt.width) &&
-          typeof this.opt.windowWidth === "number" &&
-          !isNaN(this.opt.windowWidth)
-            ? this.opt.width / this.opt.windowWidth
-            : 1;
-
-        var options = Object.assign(
-          {
-            async: true,
-            allowTaint: true,
-            scale: scale,
-            scrollX: this.opt.scrollX || 0,
-            scrollY: this.opt.scrollY || 0,
-            backgroundColor: "#ffffff",
-            imageTimeout: 15000,
-            logging: true,
-            proxy: null,
-            removeContainer: true,
-            foreignObjectRendering: false,
-            useCORS: false
-          },
-          this.opt.html2canvas
-        );
-        delete options.onrendered;
-
-        pdf.context2d.autoPaging =
-          typeof this.opt.autoPaging === "undefined"
-            ? true
-            : this.opt.autoPaging;
-        pdf.context2d.posX = this.opt.x;
-        pdf.context2d.posY = this.opt.y;
-        pdf.context2d.margin = this.opt.margin;
-        pdf.context2d.fontFaces = fontFaces;
-
-        if (fontFaces) {
-          for (var i = 0; i < fontFaces.length; ++i) {
-            var font = fontFaces[i];
-            var src = font.src.find(function(src) {
-              return src.format === "truetype";
-            });
-
-            if (src) {
-              pdf.addFont(src.url, font.ref.name, font.ref.style);
-            }
-          }
-        }
-
-        options.windowHeight = options.windowHeight || 0;
-        options.windowHeight =
-          options.windowHeight == 0
-            ? Math.max(
-                this.prop.container.clientHeight,
-                this.prop.container.scrollHeight,
-                this.prop.container.offsetHeight
-              )
-            : options.windowHeight;
-
-        return html2canvas(this.prop.container, options);
-      })
-      .then(function toContext2d_post(canvas) {
-        // Handle old-fashioned 'onrendered' argument.
-        var onRendered = this.opt.html2canvas.onrendered || function() {};
-        onRendered(canvas);
-
-        this.prop.canvas = canvas;
-        document.body.removeChild(this.prop.overlay);
-      });
-  };
-
-  Worker.prototype.toImg = function toImg() {
-    // Set up function prerequisites.
-    var prereqs = [
-      function checkCanvas() {
-        return this.prop.canvas || this.toCanvas();
-      }
-    ];
-
-    // Fulfill prereqs then create the image.
-    return this.thenList(prereqs).then(function toImg_main() {
-      var imgData = this.prop.canvas.toDataURL(
-        "image/" + this.opt.image.type,
-        this.opt.image.quality
-      );
-      this.prop.img = document.createElement("img");
-      this.prop.img.src = imgData;
-    });
-  };
-
-  Worker.prototype.toPdf = function toPdf() {
-    // Set up function prerequisites.
-    var prereqs = [
-      function checkContext2d() {
-        return this.toContext2d();
-      }
-      //function checkCanvas() { return this.prop.canvas || this.toCanvas(); }
-    ];
-
-    // Fulfill prereqs then create the image.
-    return this.thenList(prereqs).then(function toPdf_main() {
-      // Create local copies of frequently used properties.
-      this.prop.pdf = this.prop.pdf || this.opt.jsPDF;
-    });
-  };
-
-  /* ----- OUTPUT / SAVE ----- */
-
-  Worker.prototype.output = function output(type, options, src) {
-    // Redirect requests to the correct function (outputPdf / outputImg).
-    src = src || "pdf";
-    if (src.toLowerCase() === "img" || src.toLowerCase() === "image") {
-      return this.outputImg(type, options);
-    } else {
-      return this.outputPdf(type, options);
-    }
-  };
-
-  Worker.prototype.outputPdf = function outputPdf(type, options) {
-    // Set up function prerequisites.
-    var prereqs = [
-      function checkPdf() {
-        return this.prop.pdf || this.toPdf();
-      }
-    ];
-
-    // Fulfill prereqs then perform the appropriate output.
-    return this.thenList(prereqs).then(function outputPdf_main() {
-      /* Currently implemented output types:
-       *    https://rawgit.com/MrRio/jsPDF/master/docs/jspdf.js.html#line992
-       *  save(options), arraybuffer, blob, bloburi/bloburl,
-       *  datauristring/dataurlstring, dataurlnewwindow, datauri/dataurl
-       */
-      return this.prop.pdf.output(type, options);
-    });
-  };
-
-  Worker.prototype.outputImg = function outputImg(type) {
-    // Set up function prerequisites.
-    var prereqs = [
-      function checkImg() {
-        return this.prop.img || this.toImg();
-      }
-    ];
-
-    // Fulfill prereqs then perform the appropriate output.
-    return this.thenList(prereqs).then(function outputImg_main() {
-      switch (type) {
-        case undefined:
-        case "img":
-          return this.prop.img;
-        case "datauristring":
-        case "dataurlstring":
-          return this.prop.img.src;
-        case "datauri":
-        case "dataurl":
-          return (document.location.href = this.prop.img.src);
-        default:
-          throw 'Image output type "' + type + '" is not supported.';
-      }
-    });
-  };
-
-  Worker.prototype.save = function save(filename) {
-    // Set up function prerequisites.
-    var prereqs = [
-      function checkPdf() {
-        return this.prop.pdf || this.toPdf();
-      }
-    ];
-
-    // Fulfill prereqs, update the filename (if provided), and save the PDF.
-    return this.thenList(prereqs)
-      .set(filename ? { filename: filename } : null)
-      .then(function save_main() {
-        this.prop.pdf.save(this.opt.filename);
-      });
-  };
-
-  Worker.prototype.doCallback = function doCallback() {
-    // Set up function prerequisites.
-    var prereqs = [
-      function checkPdf() {
-        return this.prop.pdf || this.toPdf();
-      }
-    ];
-
-    // Fulfill prereqs, update the filename (if provided), and save the PDF.
-    return this.thenList(prereqs).then(function doCallback_main() {
-      this.prop.callback(this.prop.pdf);
-    });
-  };
-
-  /* ----- SET / GET ----- */
-
-  Worker.prototype.set = function set(opt) {
-    // TODO: Implement ordered pairs?
-
-    // Silently ignore invalid or empty input.
-    if (objType(opt) !== "object") {
-      return this;
-    }
-
-    // Build an array of setter functions to queue.
-    var fns = Object.keys(opt || {}).map(function(key) {
-      if (key in Worker.template.prop) {
-        // Set pre-defined properties.
-        return function set_prop() {
-          this.prop[key] = opt[key];
-        };
-      } else {
-        switch (key) {
-          case "margin":
-            return this.setMargin.bind(this, opt.margin);
-          case "jsPDF":
-            return function set_jsPDF() {
-              this.opt.jsPDF = opt.jsPDF;
-              return this.setPageSize();
-            };
-          case "pageSize":
-            return this.setPageSize.bind(this, opt.pageSize);
-          default:
-            // Set any other properties in opt.
-            return function set_opt() {
-              this.opt[key] = opt[key];
-            };
-        }
-      }
-    }, this);
-
-    // Set properties within the promise chain.
-    return this.then(function set_main() {
-      return this.thenList(fns);
-    });
-  };
-
-  Worker.prototype.get = function get(key, cbk) {
-    return this.then(function get_main() {
-      // Fetch the requested property, either as a predefined prop or in opt.
-      var val = key in Worker.template.prop ? this.prop[key] : this.opt[key];
-      return cbk ? cbk(val) : val;
-    });
-  };
-
-  Worker.prototype.setMargin = function setMargin(margin) {
-    return this.then(function setMargin_main() {
-      // Parse the margin property.
-      switch (objType(margin)) {
-        case "number":
-          margin = [margin, margin, margin, margin];
-        // eslint-disable-next-line no-fallthrough
-        case "array":
-          if (margin.length === 2) {
-            margin = [margin[0], margin[1], margin[0], margin[1]];
-          }
-          if (margin.length === 4) {
-            break;
-          }
-        // eslint-disable-next-line no-fallthrough
-        default:
-          return this.error("Invalid margin array.");
-      }
-
-      // Set the margin property, then update pageSize.
-      this.opt.margin = margin;
-    }).then(this.setPageSize);
-  };
-
-  Worker.prototype.setPageSize = function setPageSize(pageSize) {
-    function toPx(val, k) {
-      return Math.floor(((val * k) / 72) * 96);
-    }
-
-    return this.then(function setPageSize_main() {
-      // Retrieve page-size based on jsPDF settings, if not explicitly provided.
-      pageSize = pageSize || jsPDF.getPageSize(this.opt.jsPDF);
-
-      // Add 'inner' field if not present.
-      if (!pageSize.hasOwnProperty("inner")) {
-        pageSize.inner = {
-          width: pageSize.width - this.opt.margin[1] - this.opt.margin[3],
-          height: pageSize.height - this.opt.margin[0] - this.opt.margin[2]
-        };
-        pageSize.inner.px = {
-          width: toPx(pageSize.inner.width, pageSize.k),
-          height: toPx(pageSize.inner.height, pageSize.k)
-        };
-        pageSize.inner.ratio = pageSize.inner.height / pageSize.inner.width;
-      }
-
-      // Attach pageSize to this.
-      this.prop.pageSize = pageSize;
-    });
-  };
-
-  Worker.prototype.setProgress = function setProgress(val, state, n, stack) {
-    // Immediately update all progress values.
-    if (val != null) this.progress.val = val;
-    if (state != null) this.progress.state = state;
-    if (n != null) this.progress.n = n;
-    if (stack != null) this.progress.stack = stack;
-    this.progress.ratio = this.progress.val / this.progress.state;
-
-    // Return this for command chaining.
-    return this;
-  };
-
-  Worker.prototype.updateProgress = function updateProgress(
-    val,
-    state,
-    n,
-    stack
-  ) {
-    // Immediately update all progress values, using setProgress.
-    return this.setProgress(
-      val ? this.progress.val + val : null,
-      state ? state : null,
-      n ? this.progress.n + n : null,
-      stack ? this.progress.stack.concat(stack) : null
-    );
-  };
-
-  /* ----- PROMISE MAPPING ----- */
-
-  Worker.prototype.then = function then(onFulfilled, onRejected) {
-    // Wrap `this` for encapsulation.
-    var self = this;
-
-    return this.thenCore(onFulfilled, onRejected, function then_main(
-      onFulfilled,
-      onRejected
-    ) {
-      // Update progress while queuing, calling, and resolving `then`.
-      self.updateProgress(null, null, 1, [onFulfilled]);
-      return Promise.prototype.then
-        .call(this, function then_pre(val) {
-          self.updateProgress(null, onFulfilled);
-          return val;
-        })
-        .then(onFulfilled, onRejected)
-        .then(function then_post(val) {
-          self.updateProgress(1);
-          return val;
-        });
-    });
-  };
-
-  Worker.prototype.thenCore = function thenCore(
-    onFulfilled,
-    onRejected,
-    thenBase
-  ) {
-    // Handle optional thenBase parameter.
-    thenBase = thenBase || Promise.prototype.then;
-
-    // Wrap `this` for encapsulation and bind it to the promise handlers.
-    var self = this;
-    if (onFulfilled) {
-      onFulfilled = onFulfilled.bind(self);
-    }
-    if (onRejected) {
-      onRejected = onRejected.bind(self);
-    }
-
-    // Cast self into a Promise to avoid polyfills recursively defining `then`.
-    var isNative =
-      Promise.toString().indexOf("[native code]") !== -1 &&
-      Promise.name === "Promise";
-    var selfPromise = isNative
-      ? self
-      : Worker.convert(Object.assign({}, self), Promise.prototype);
-
-    // Return the promise, after casting it into a Worker and preserving props.
-    var returnVal = thenBase.call(selfPromise, onFulfilled, onRejected);
-    return Worker.convert(returnVal, self.__proto__);
-  };
-
-  Worker.prototype.thenExternal = function thenExternal(
-    onFulfilled,
-    onRejected
-  ) {
-    // Call `then` and return a standard promise (exits the Worker chain).
-    return Promise.prototype.then.call(this, onFulfilled, onRejected);
-  };
-
-  Worker.prototype.thenList = function thenList(fns) {
-    // Queue a series of promise 'factories' into the promise chain.
-    var self = this;
-    fns.forEach(function thenList_forEach(fn) {
-      self = self.thenCore(fn);
-    });
-    return self;
-  };
-
-  Worker.prototype["catch"] = function(onRejected) {
-    // Bind `this` to the promise handler, call `catch`, and return a Worker.
-    if (onRejected) {
-      onRejected = onRejected.bind(this);
-    }
-    var returnVal = Promise.prototype["catch"].call(this, onRejected);
-    return Worker.convert(returnVal, this);
-  };
-
-  Worker.prototype.catchExternal = function catchExternal(onRejected) {
-    // Call `catch` and return a standard promise (exits the Worker chain).
-    return Promise.prototype["catch"].call(this, onRejected);
-  };
-
-  Worker.prototype.error = function error(msg) {
-    // Throw the error in the Promise chain.
-    return this.then(function error_main() {
-      throw new Error(msg);
-    });
-  };
-
-  /* ----- ALIASES ----- */
-
-  Worker.prototype.using = Worker.prototype.set;
-  Worker.prototype.saveAs = Worker.prototype.save;
-  Worker.prototype.export = Worker.prototype.output;
-  Worker.prototype.run = Worker.prototype.then;
-
-  // Get dimensions of a PDF page, as determined by jsPDF.
-  jsPDF.getPageSize = function(orientation, unit, format) {
-    // Decode options object
-    if (typeof orientation === "object") {
-      var options = orientation;
-      orientation = options.orientation;
-      unit = options.unit || unit;
-      format = options.format || format;
-    }
-
-    // Default options
-    unit = unit || "mm";
-    format = format || "a4";
-    orientation = ("" + (orientation || "P")).toLowerCase();
-    var format_as_string = ("" + format).toLowerCase();
-
-    // Size in pt of various paper formats
-    var pageFormats = {
-      a0: [2383.94, 3370.39],
-      a1: [1683.78, 2383.94],
-      a2: [1190.55, 1683.78],
-      a3: [841.89, 1190.55],
-      a4: [595.28, 841.89],
-      a5: [419.53, 595.28],
-      a6: [297.64, 419.53],
-      a7: [209.76, 297.64],
-      a8: [147.4, 209.76],
-      a9: [104.88, 147.4],
-      a10: [73.7, 104.88],
-      b0: [2834.65, 4008.19],
-      b1: [2004.09, 2834.65],
-      b2: [1417.32, 2004.09],
-      b3: [1000.63, 1417.32],
-      b4: [708.66, 1000.63],
-      b5: [498.9, 708.66],
-      b6: [354.33, 498.9],
-      b7: [249.45, 354.33],
-      b8: [175.75, 249.45],
-      b9: [124.72, 175.75],
-      b10: [87.87, 124.72],
-      c0: [2599.37, 3676.54],
-      c1: [1836.85, 2599.37],
-      c2: [1298.27, 1836.85],
-      c3: [918.43, 1298.27],
-      c4: [649.13, 918.43],
-      c5: [459.21, 649.13],
-      c6: [323.15, 459.21],
-      c7: [229.61, 323.15],
-      c8: [161.57, 229.61],
-      c9: [113.39, 161.57],
-      c10: [79.37, 113.39],
-      dl: [311.81, 623.62],
-      letter: [612, 792],
-      "government-letter": [576, 756],
-      legal: [612, 1008],
-      "junior-legal": [576, 360],
-      ledger: [1224, 792],
-      tabloid: [792, 1224],
-      "credit-card": [153, 243]
-    };
-
-    var k;
-    // Unit conversion
-    switch (unit) {
-      case "pt":
-        k = 1;
-        break;
-      case "mm":
-        k = 72 / 25.4;
-        break;
-      case "cm":
-        k = 72 / 2.54;
-        break;
-      case "in":
-        k = 72;
-        break;
-      case "px":
-        k = 72 / 96;
-        break;
-      case "pc":
-        k = 12;
-        break;
-      case "em":
-        k = 12;
-        break;
-      case "ex":
-        k = 6;
-        break;
-      default:
-        throw "Invalid unit: " + unit;
-    }
-    var pageHeight = 0;
-    var pageWidth = 0;
-
-    // Dimensions are stored as user units and converted to points on output
-    if (pageFormats.hasOwnProperty(format_as_string)) {
-      pageHeight = pageFormats[format_as_string][1] / k;
-      pageWidth = pageFormats[format_as_string][0] / k;
-    } else {
-      try {
-        pageHeight = format[1];
-        pageWidth = format[0];
-      } catch (err) {
-        throw new Error("Invalid format: " + format);
-      }
-    }
-
-    var tmp;
-    // Handle page orientation
-    if (orientation === "p" || orientation === "portrait") {
-      orientation = "p";
-      if (pageWidth > pageHeight) {
-        tmp = pageWidth;
-        pageWidth = pageHeight;
-        pageHeight = tmp;
-      }
-    } else if (orientation === "l" || orientation === "landscape") {
-      orientation = "l";
-      if (pageHeight > pageWidth) {
-        tmp = pageWidth;
-        pageWidth = pageHeight;
-        pageHeight = tmp;
-      }
-    } else {
-      throw "Invalid orientation: " + orientation;
-    }
-
-    // Return information (k is the unit conversion ratio from pts)
-    var info = {
-      width: pageWidth,
-      height: pageHeight,
-      unit: unit,
-      k: k,
-      orientation: orientation
-    };
-    return info;
-  };
-
-  /**
-   * @typedef FontFace
-   *
-   * The font-face type implements an interface similar to that of the font-face CSS rule,
-   * and is used by jsPDF to match fonts when the font property of CanvasRenderingContext2D
-   * is updated.
-   *
-   * All properties expect values similar to those in the font-face CSS rule. A difference
-   * is the font-family, which do not need to be enclosed in double-quotes when containing
-   * spaces like in CSS.
-   *
-   * @property {string} family The name of the font-family.
-   * @property {string|undefined} style The style that this font-face defines, e.g. 'italic'.
-   * @property {string|number|undefined} weight The weight of the font, either as a string or a number (400, 500, 600, e.g.)
-   * @property {string|undefined} stretch The stretch of the font, e.g. condensed, normal, expanded.
-   * @property {Object[]} src A list of URLs from where fonts of various formats can be fetched.
-   * @property {string} [src] url A URL to a font of a specific format.
-   * @property {string} [src] format Format of the font referenced by the URL.
-   */
-
-  /**
-   * Generate a PDF from an HTML element or string using.
-   *
-   * @name html
-   * @function
-   * @param {HTMLElement|string} source The source HTMLElement or a string containing HTML.
-   * @param {Object} [options] Collection of settings
-   * @param {function} [options.callback] The mandatory callback-function gets as first parameter the current jsPDF instance
-   * @param {(number|number[])=} [options.margin] Page margins [top, right, bottom, left]. Default is 0.
-   * @param {(boolean|'slice'|'text')=} [options.autoPaging] The auto paging mode.
-   * <ul>
-   * <li>
-   *   <code>false</code>: Auto paging is disabled.
-   * </li>
-   * <li>
-   *   <code>true</code> or <code>'slice'</code>: Will cut shapes or text chunks across page breaks. Will possibly
-   *   slice text in half, making it difficult to read.
-   * </li>
-   * <li>
-   *   <code>'text'</code>: Trys not to cut text in half across page breaks. Works best for documents consisting
-   *   mostly of a single column of text.
-   * </li>
-   * </ul>
-   * Default is <code>true</code>.
-   * @param {string} [options.filename] name of the file
-   * @param {HTMLOptionImage} [options.image] image settings when converting HTML to image
-   * @param {Html2CanvasOptions} [options.html2canvas] html2canvas options
-   * @param {FontFace[]} [options.fontFaces] A list of font-faces to match when resolving fonts. Fonts will be added to the PDF based on the specified URL. If omitted, the font match algorithm falls back to old algorithm.
-   * @param {jsPDF} [options.jsPDF] jsPDF instance
-   * @param {number=} [options.x] x position on the PDF document in jsPDF units.
-   * @param {number=} [options.y] y position on the PDF document in jsPDF units.
-   * @param {number=} [options.width] The target width in the PDF document in jsPDF units. The rendered element will be
-   * scaled such that it fits into the specified width. Has no effect if either the <code>html2canvas.scale<code> is
-   * specified or the <code>windowWidth</code> option is NOT specified.
-   * @param {number=} [options.windowWidth] The window width in CSS pixels. In contrast to the
-   * <code>html2canvas.windowWidth</code> option, this option affects the actual container size while rendering and
-   * does NOT affect CSS media queries. This option only has an effect, if the <code>width<code> option is also specified.
-   *
-   * @example
-   * var doc = new jsPDF();
-   *
-   * doc.html(document.body, {
-   *    callback: function (doc) {
-   *      doc.save();
-   *    },
-   *    x: 10,
-   *    y: 10
-   * });
-   */
-  jsPDFAPI.html = function(src, options) {
-
-    options = options || {};
-    options.callback = options.callback || function() {};
-    options.html2canvas = options.html2canvas || {};
-    options.html2canvas.canvas = options.html2canvas.canvas || this.canvas;
-    options.jsPDF = options.jsPDF || this;
-    options.fontFaces = options.fontFaces
-      ? options.fontFaces.map(normalizeFontFace)
-      : null;
-
-    // Create a new worker with the given options.
-    var worker = new Worker(options);
-
-    if (!options.worker) {
-      // If worker is not set to true, perform the traditional 'simple' operation.
-      return worker.from(src).doCallback();
-    } else {
-      // Otherwise, return the worker for new Promise-based operation.
-      return worker;
-    }
-  };
-})(jsPDF.API);
+/* eslint-disable @typescript-eslint/no-empty-function */
+ 
+ /**
+  * jsPDF html PlugIn
+  *
+  * @name html
+  * @module
+  */
+ (function(jsPDFAPI) {
+ 
+   function loadHtml2Canvas() {
+     return (function() {
+       if (globalObject["html2canvas"]) {
+         return Promise.resolve(globalObject["html2canvas"]);
+       }
+ 
+ 
+       if (typeof exports === "object" && typeof module !== "undefined") {
+         return new Promise(function(resolve, reject) {
+           try {
+             resolve(require("html2canvas"));
+           } catch (e) {
+             reject(e);
+           }
+         });
+       }
+       if (typeof define === "function" && define.amd) {
+         return new Promise(function(resolve, reject) {
+           try {
+             require(["html2canvas"], resolve);
+           } catch (e) {
+             reject(e);
+           }
+         });
+       }
+       return Promise.reject(new Error("Could not load html2canvas"));
+     })()
+       .catch(function(e) {
+         return Promise.reject(new Error("Could not load html2canvas: " + e));
+       })
+       .then(function(html2canvas) {
+         return html2canvas.default ? html2canvas.default : html2canvas;
+       });
+   }
+ 
+   function loadDomPurify() {
+     return (function() {
+       if (globalObject["DOMPurify"]) {
+         return Promise.resolve(globalObject["DOMPurify"]);
+       }
+ 
+ 
+       if (typeof exports === "object" && typeof module !== "undefined") {
+         return new Promise(function(resolve, reject) {
+           try {
+             resolve(require("dompurify"));
+           } catch (e) {
+             reject(e);
+           }
+         });
+       }
+       if (typeof define === "function" && define.amd) {
+         return new Promise(function(resolve, reject) {
+           try {
+             require(["dompurify"], resolve);
+           } catch (e) {
+             reject(e);
+           }
+         });
+       }
+       return Promise.reject(new Error("Could not load dompurify"));
+     })()
+       .catch(function(e) {
+         return Promise.reject(new Error("Could not load dompurify: " + e));
+       })
+       .then(function(dompurify) {
+         return dompurify.default ? dompurify.default : dompurify;
+       });
+   }
+ 
+   /**
+    * Determine the type of a variable/object.
+    *
+    * @private
+    * @ignore
+    */
+   var objType = function(obj) {
+     var type = typeof obj;
+     if (type === "undefined") return "undefined";
+     else if (type === "string" || obj instanceof String) return "string";
+     else if (type === "number" || obj instanceof Number) return "number";
+     else if (type === "function" || obj instanceof Function) return "function";
+     else if (!!obj && obj.constructor === Array) return "array";
+     else if (obj && obj.nodeType === 1) return "element";
+     else if (type === "object") return "object";
+     else return "unknown";
+   };
+ 
+   /**
+    * Create an HTML element with optional className, innerHTML, and style.
+    *
+    * @private
+    * @ignore
+    */
+   var createElement = function(tagName, opt) {
+     var el = document.createElement(tagName);
+     if (opt.className) el.className = opt.className;
+     if (opt.innerHTML && opt.dompurify) {
+       el.innerHTML = opt.dompurify.sanitize(opt.innerHTML);
+     }
+     for (var key in opt.style) {
+       el.style[key] = opt.style[key];
+     }
+     return el;
+   };
+ 
+   /**
+    * Deep-clone a node and preserve contents/properties.
+    *
+    * @private
+    * @ignore
+    */
+   var cloneNode = function(node, javascriptEnabled) {
+     // Recursively clone the node.
+     var clone =
+       node.nodeType === 3
+         ? document.createTextNode(node.nodeValue)
+         : node.cloneNode(false);
+     for (var child = node.firstChild; child; child = child.nextSibling) {
+       if (
+         javascriptEnabled === true ||
+         child.nodeType !== 1 ||
+         child.nodeName !== "SCRIPT"
+       ) {
+         clone.appendChild(cloneNode(child, javascriptEnabled));
+       }
+     }
+ 
+     if (node.nodeType === 1) {
+       // Preserve contents/properties of special nodes.
+       if (node.nodeName === "CANVAS") {
+         clone.width = node.width;
+         clone.height = node.height;
+         clone.getContext("2d").drawImage(node, 0, 0);
+       } else if (node.nodeName === "TEXTAREA" || node.nodeName === "SELECT") {
+         clone.value = node.value;
+       }
+ 
+       // Preserve the node's scroll position when it loads.
+       clone.addEventListener(
+         "load",
+         function() {
+           clone.scrollTop = node.scrollTop;
+           clone.scrollLeft = node.scrollLeft;
+         },
+         true
+       );
+     }
+ 
+     // Return the cloned node.
+     return clone;
+   };
+ 
+   /* ----- CONSTRUCTOR ----- */
+ 
+   var Worker = function Worker(opt) {
+     // Create the root parent for the proto chain, and the starting Worker.
+     var root = Object.assign(
+       Worker.convert(Promise.resolve()),
+       JSON.parse(JSON.stringify(Worker.template))
+     );
+     var self = Worker.convert(Promise.resolve(), root);
+ 
+     // Set progress, optional settings, and return.
+     self = self.setProgress(1, Worker, 1, [Worker]);
+     self = self.set(opt);
+     return self;
+   };
+ 
+   // Boilerplate for subclassing Promise.
+   Worker.prototype = Object.create(Promise.prototype);
+   Worker.prototype.constructor = Worker;
+ 
+   // Converts/casts promises into Workers.
+   Worker.convert = function convert(promise, inherit) {
+     // Uses prototypal inheritance to receive changes made to ancestors' properties.
+     promise.__proto__ = inherit || Worker.prototype;
+     return promise;
+   };
+ 
+   Worker.template = {
+     prop: {
+       src: null,
+       container: null,
+       overlay: null,
+       canvas: null,
+       img: null,
+       pdf: null,
+       pageSize: null,
+       callback: function() {}
+     },
+     progress: {
+       val: 0,
+       state: null,
+       n: 0,
+       stack: []
+     },
+     opt: {
+       filename: "file.pdf",
+       margin: [0, 0, 0, 0],
+       enableLinks: true,
+       x: 0,
+       y: 0,
+       html2canvas: {},
+       jsPDF: {},
+       backgroundColor: "transparent"
+     }
+   };
+ 
+   /* ----- FROM / TO ----- */
+ 
+   Worker.prototype.from = function from(src, type) {
+     function getType(src) {
+       switch (objType(src)) {
+         case "string":
+           return "string";
+         case "element":
+           return src.nodeName.toLowerCase() === "canvas" ? "canvas" : "element";
+         default:
+           return "unknown";
+       }
+     }
+ 
+     return this.then(function from_main() {
+       type = type || getType(src);
+       switch (type) {
+         case "string":
+           return this.then(loadDomPurify).then(function(dompurify) {
+             return this.set({
+               src: createElement("div", {
+                 innerHTML: src,
+                 dompurify: dompurify
+               })
+             });
+           });
+         case "element":
+           return this.set({ src: src });
+         case "canvas":
+           return this.set({ canvas: src });
+         case "img":
+           return this.set({ img: src });
+         default:
+           return this.error("Unknown source type.");
+       }
+     });
+   };
+ 
+   Worker.prototype.to = function to(target) {
+     // Route the 'to' request to the appropriate method.
+     switch (target) {
+       case "container":
+         return this.toContainer();
+       case "canvas":
+         return this.toCanvas();
+       case "img":
+         return this.toImg();
+       case "pdf":
+         return this.toPdf();
+       default:
+         return this.error("Invalid target.");
+     }
+   };
+ 
+   Worker.prototype.toContainer = function toContainer() {
+     // Set up function prerequisites.
+     var prereqs = [
+       function checkSrc() {
+         return (
+           this.prop.src || this.error("Cannot duplicate - no source HTML.")
+         );
+       },
+       function checkPageSize() {
+         return this.prop.pageSize || this.setPageSize();
+       }
+     ];
+     return this.thenList(prereqs).then(function toContainer_main() {
+       // Define the CSS styles for the container and its overlay parent.
+       var overlayCSS = {
+         position: "fixed",
+         overflow: "hidden",
+         zIndex: 1000,
+         left: "-100000px",
+         right: 0,
+         bottom: 0,
+         top: 0
+       };
+       var containerCSS = {
+         position: "relative",
+         display: "inline-block",
+         width:
+           (typeof this.opt.width === "number" &&
+           !isNaN(this.opt.width) &&
+           typeof this.opt.windowWidth === "number" &&
+           !isNaN(this.opt.windowWidth)
+             ? this.opt.windowWidth
+             : Math.max(
+                 this.prop.src.clientWidth,
+                 this.prop.src.scrollWidth,
+                 this.prop.src.offsetWidth
+               )) + "px",
+         left: 0,
+         right: 0,
+         top: 0,
+         margin: "auto",
+         backgroundColor: this.opt.backgroundColor
+       }; // Set the overlay to hidden (could be changed in the future to provide a print preview).
+ 
+       var source = cloneNode(
+         this.prop.src,
+         this.opt.html2canvas.javascriptEnabled
+       );
+
+       source.style.visibility = "visible";
+ 
+       if (source.tagName === "BODY") {
+         containerCSS.height =
+           Math.max(
+             document.body.scrollHeight,
+             document.body.offsetHeight,
+             document.documentElement.clientHeight,
+             document.documentElement.scrollHeight,
+             document.documentElement.offsetHeight
+           ) + "px";
+       }
+ 
+       this.prop.overlay = createElement("div", {
+         className: "html2pdf__overlay",
+         style: overlayCSS
+       });
+       this.prop.container = createElement("div", {
+         className: "html2pdf__container",
+         style: containerCSS
+       });
+       this.prop.container.appendChild(source);
+       this.prop.container.firstChild.appendChild(
+         createElement("div", {
+           style: {
+             clear: "both",
+             border: "0 none transparent",
+             margin: 0,
+             padding: 0,
+             height: 0
+           }
+         })
+       );
+       this.prop.container.style.float = "none";
+       this.prop.overlay.appendChild(this.prop.container);
+       document.body.appendChild(this.prop.overlay);
+       this.prop.container.firstChild.style.position = "relative";
+       this.prop.container.height =
+         Math.max(
+           this.prop.container.firstChild.clientHeight,
+           this.prop.container.firstChild.scrollHeight,
+           this.prop.container.firstChild.offsetHeight
+         ) + "px";
+     });
+   };
+ 
+   Worker.prototype.toCanvas = function toCanvas() {
+     // Set up function prerequisites.
+     var prereqs = [
+       function checkContainer() {
+         return (
+           document.body.contains(this.prop.container) || this.toContainer()
+         );
+       }
+     ];
+ 
+     // Fulfill prereqs then create the canvas.
+     return this.thenList(prereqs)
+       .then(loadHtml2Canvas)
+       .then(function toCanvas_main(html2canvas) {
+         // Handle old-fashioned 'onrendered' argument.
+         var options = Object.assign({}, this.opt.html2canvas);
+         delete options.onrendered;
+ 
+         return html2canvas(this.prop.container, options);
+       })
+       .then(function toCanvas_post(canvas) {
+         // Handle old-fashioned 'onrendered' argument.
+         var onRendered = this.opt.html2canvas.onrendered || function() {};
+         onRendered(canvas);
+ 
+         this.prop.canvas = canvas;
+         document.body.removeChild(this.prop.overlay);
+       });
+   };
+ 
+   Worker.prototype.toContext2d = function toContext2d() {
+     // Set up function prerequisites.
+     var prereqs = [
+       function checkContainer() {
+         return (
+           document.body.contains(this.prop.container) || this.toContainer()
+         );
+       }
+     ];
+ 
+     // Fulfill prereqs then create the canvas.
+     return this.thenList(prereqs)
+       .then(loadHtml2Canvas)
+       .then(function toContext2d_main(html2canvas) {
+         // Handle old-fashioned 'onrendered' argument.
+ 
+         var pdf = this.opt.jsPDF;
+         var fontFaces = this.opt.fontFaces;
+ 
+         var scale =
+           typeof this.opt.width === "number" &&
+           !isNaN(this.opt.width) &&
+           typeof this.opt.windowWidth === "number" &&
+           !isNaN(this.opt.windowWidth)
+             ? this.opt.width / this.opt.windowWidth
+             : 1;
+ 
+         var options = Object.assign(
+           {
+             async: true,
+             allowTaint: true,
+             scale: scale,
+             scrollX: this.opt.scrollX || 0,
+             scrollY: this.opt.scrollY || 0,
+             backgroundColor: "#ffffff",
+             imageTimeout: 15000,
+             logging: true,
+             proxy: null,
+             removeContainer: true,
+             foreignObjectRendering: false,
+             useCORS: false
+           },
+           this.opt.html2canvas
+         );
+         delete options.onrendered;
+ 
+         pdf.context2d.autoPaging =
+           typeof this.opt.autoPaging === "undefined"
+             ? true
+             : this.opt.autoPaging;
+         pdf.context2d.posX = this.opt.x;
+         pdf.context2d.posY = this.opt.y;
+         pdf.context2d.margin = this.opt.margin;
+         pdf.context2d.fontFaces = fontFaces;
+ 
+         if (fontFaces) {
+           for (var i = 0; i < fontFaces.length; ++i) {
+             var font = fontFaces[i];
+             var src = font.src.find(function(src) {
+               return src.format === "truetype";
+             });
+ 
+             if (src) {
+               pdf.addFont(src.url, font.ref.name, font.ref.style);
+             }
+           }
+         }
+ 
+         options.windowHeight = options.windowHeight || 0;
+         options.windowHeight =
+           options.windowHeight == 0
+             ? Math.max(
+                 this.prop.container.clientHeight,
+                 this.prop.container.scrollHeight,
+                 this.prop.container.offsetHeight
+               )
+             : options.windowHeight;
+ 
+         pdf.context2d.save(true);
+         return html2canvas(this.prop.container, options);
+       })
+       .then(function toContext2d_post(canvas) {
+         this.opt.jsPDF.context2d.restore(true);
+ 
+         // Handle old-fashioned 'onrendered' argument.
+         var onRendered = this.opt.html2canvas.onrendered || function() {};
+         onRendered(canvas);
+ 
+         this.prop.canvas = canvas;
+         document.body.removeChild(this.prop.overlay);
+       });
+   };
+ 
+   Worker.prototype.toImg = function toImg() {
+     // Set up function prerequisites.
+     var prereqs = [
+       function checkCanvas() {
+         return this.prop.canvas || this.toCanvas();
+       }
+     ];
+ 
+     // Fulfill prereqs then create the image.
+     return this.thenList(prereqs).then(function toImg_main() {
+       var imgData = this.prop.canvas.toDataURL(
+         "image/" + this.opt.image.type,
+         this.opt.image.quality
+       );
+       this.prop.img = document.createElement("img");
+       this.prop.img.src = imgData;
+     });
+   };
+ 
+   Worker.prototype.toPdf = function toPdf() {
+     // Set up function prerequisites.
+     var prereqs = [
+       function checkContext2d() {
+         return this.toContext2d();
+       }
+       //function checkCanvas() { return this.prop.canvas || this.toCanvas(); }
+     ];
+ 
+     // Fulfill prereqs then create the image.
+     return this.thenList(prereqs).then(function toPdf_main() {
+       // Create local copies of frequently used properties.
+       this.prop.pdf = this.prop.pdf || this.opt.jsPDF;
+     });
+   };
+ 
+   /* ----- OUTPUT / SAVE ----- */
+ 
+   Worker.prototype.output = function output(type, options, src) {
+     // Redirect requests to the correct function (outputPdf / outputImg).
+     src = src || "pdf";
+     if (src.toLowerCase() === "img" || src.toLowerCase() === "image") {
+       return this.outputImg(type, options);
+     } else {
+       return this.outputPdf(type, options);
+     }
+   };
+ 
+   Worker.prototype.outputPdf = function outputPdf(type, options) {
+     // Set up function prerequisites.
+     var prereqs = [
+       function checkPdf() {
+         return this.prop.pdf || this.toPdf();
+       }
+     ];
+ 
+     // Fulfill prereqs then perform the appropriate output.
+     return this.thenList(prereqs).then(function outputPdf_main() {
+       /* Currently implemented output types:
+        *    https://rawgit.com/MrRio/jsPDF/master/docs/jspdf.js.html#line992
+        *  save(options), arraybuffer, blob, bloburi/bloburl,
+        *  datauristring/dataurlstring, dataurlnewwindow, datauri/dataurl
+        */
+       return this.prop.pdf.output(type, options);
+     });
+   };
+ 
+   Worker.prototype.outputImg = function outputImg(type) {
+     // Set up function prerequisites.
+     var prereqs = [
+       function checkImg() {
+         return this.prop.img || this.toImg();
+       }
+     ];
+ 
+     // Fulfill prereqs then perform the appropriate output.
+     return this.thenList(prereqs).then(function outputImg_main() {
+       switch (type) {
+         case undefined:
+         case "img":
+           return this.prop.img;
+         case "datauristring":
+         case "dataurlstring":
+           return this.prop.img.src;
+         case "datauri":
+         case "dataurl":
+           return (document.location.href = this.prop.img.src);
+         default:
+           throw 'Image output type "' + type + '" is not supported.';
+       }
+     });
+   };
+ 
+   Worker.prototype.save = function save(filename) {
+     // Set up function prerequisites.
+     var prereqs = [
+       function checkPdf() {
+         return this.prop.pdf || this.toPdf();
+       }
+     ];
+ 
+     // Fulfill prereqs, update the filename (if provided), and save the PDF.
+     return this.thenList(prereqs)
+       .set(filename ? { filename: filename } : null)
+       .then(function save_main() {
+         this.prop.pdf.save(this.opt.filename);
+       });
+   };
+ 
+   Worker.prototype.doCallback = function doCallback() {
+     // Set up function prerequisites.
+     var prereqs = [
+       function checkPdf() {
+         return this.prop.pdf || this.toPdf();
+       }
+     ];
+ 
+     // Fulfill prereqs, update the filename (if provided), and save the PDF.
+     return this.thenList(prereqs).then(function doCallback_main() {
+       this.prop.callback(this.prop.pdf);
+     });
+   };
+ 
+   /* ----- SET / GET ----- */
+ 
+   Worker.prototype.set = function set(opt) {
+     // TODO: Implement ordered pairs?
+ 
+     // Silently ignore invalid or empty input.
+     if (objType(opt) !== "object") {
+       return this;
+     }
+ 
+     // Build an array of setter functions to queue.
+     var fns = Object.keys(opt || {}).map(function(key) {
+       if (key in Worker.template.prop) {
+         // Set pre-defined properties.
+         return function set_prop() {
+           this.prop[key] = opt[key];
+         };
+       } else {
+         switch (key) {
+           case "margin":
+             return this.setMargin.bind(this, opt.margin);
+           case "jsPDF":
+             return function set_jsPDF() {
+               this.opt.jsPDF = opt.jsPDF;
+               return this.setPageSize();
+             };
+           case "pageSize":
+             return this.setPageSize.bind(this, opt.pageSize);
+           default:
+             // Set any other properties in opt.
+             return function set_opt() {
+               this.opt[key] = opt[key];
+             };
+         }
+       }
+     }, this);
+ 
+     // Set properties within the promise chain.
+     return this.then(function set_main() {
+       return this.thenList(fns);
+     });
+   };
+ 
+   Worker.prototype.get = function get(key, cbk) {
+     return this.then(function get_main() {
+       // Fetch the requested property, either as a predefined prop or in opt.
+       var val = key in Worker.template.prop ? this.prop[key] : this.opt[key];
+       return cbk ? cbk(val) : val;
+     });
+   };
+ 
+   Worker.prototype.setMargin = function setMargin(margin) {
+     return this.then(function setMargin_main() {
+       // Parse the margin property.
+       switch (objType(margin)) {
+         case "number":
+           margin = [margin, margin, margin, margin];
+         // eslint-disable-next-line no-fallthrough
+         case "array":
+           if (margin.length === 2) {
+             margin = [margin[0], margin[1], margin[0], margin[1]];
+           }
+           if (margin.length === 4) {
+             break;
+           }
+         // eslint-disable-next-line no-fallthrough
+         default:
+           return this.error("Invalid margin array.");
+       }
+ 
+       // Set the margin property, then update pageSize.
+       this.opt.margin = margin;
+     }).then(this.setPageSize);
+   };
+ 
+   Worker.prototype.setPageSize = function setPageSize(pageSize) {
+     function toPx(val, k) {
+       return Math.floor(((val * k) / 72) * 96);
+     }
+ 
+     return this.then(function setPageSize_main() {
+       // Retrieve page-size based on jsPDF settings, if not explicitly provided.
+       pageSize = pageSize || jsPDF.getPageSize(this.opt.jsPDF);
+ 
+       // Add 'inner' field if not present.
+       if (!pageSize.hasOwnProperty("inner")) {
+         pageSize.inner = {
+           width: pageSize.width - this.opt.margin[1] - this.opt.margin[3],
+           height: pageSize.height - this.opt.margin[0] - this.opt.margin[2]
+         };
+         pageSize.inner.px = {
+           width: toPx(pageSize.inner.width, pageSize.k),
+           height: toPx(pageSize.inner.height, pageSize.k)
+         };
+         pageSize.inner.ratio = pageSize.inner.height / pageSize.inner.width;
+       }
+ 
+       // Attach pageSize to this.
+       this.prop.pageSize = pageSize;
+     });
+   };
+ 
+   Worker.prototype.setProgress = function setProgress(val, state, n, stack) {
+     // Immediately update all progress values.
+     if (val != null) this.progress.val = val;
+     if (state != null) this.progress.state = state;
+     if (n != null) this.progress.n = n;
+     if (stack != null) this.progress.stack = stack;
+     this.progress.ratio = this.progress.val / this.progress.state;
+ 
+     // Return this for command chaining.
+     return this;
+   };
+ 
+   Worker.prototype.updateProgress = function updateProgress(
+     val,
+     state,
+     n,
+     stack
+   ) {
+     // Immediately update all progress values, using setProgress.
+     return this.setProgress(
+       val ? this.progress.val + val : null,
+       state ? state : null,
+       n ? this.progress.n + n : null,
+       stack ? this.progress.stack.concat(stack) : null
+     );
+   };
+ 
+   /* ----- PROMISE MAPPING ----- */
+ 
+   Worker.prototype.then = function then(onFulfilled, onRejected) {
+     // Wrap `this` for encapsulation.
+     var self = this;
+ 
+     return this.thenCore(onFulfilled, onRejected, function then_main(
+       onFulfilled,
+       onRejected
+     ) {
+       // Update progress while queuing, calling, and resolving `then`.
+       self.updateProgress(null, null, 1, [onFulfilled]);
+       return Promise.prototype.then
+         .call(this, function then_pre(val) {
+           self.updateProgress(null, onFulfilled);
+           return val;
+         })
+         .then(onFulfilled, onRejected)
+         .then(function then_post(val) {
+           self.updateProgress(1);
+           return val;
+         });
+     });
+   };
+ 
+   Worker.prototype.thenCore = function thenCore(
+     onFulfilled,
+     onRejected,
+     thenBase
+   ) {
+     // Handle optional thenBase parameter.
+     thenBase = thenBase || Promise.prototype.then;
+ 
+     // Wrap `this` for encapsulation and bind it to the promise handlers.
+     var self = this;
+     if (onFulfilled) {
+       onFulfilled = onFulfilled.bind(self);
+     }
+     if (onRejected) {
+       onRejected = onRejected.bind(self);
+     }
+ 
+     // Cast self into a Promise to avoid polyfills recursively defining `then`.
+     var isNative =
+       Promise.toString().indexOf("[native code]") !== -1 &&
+       Promise.name === "Promise";
+     var selfPromise = isNative
+       ? self
+       : Worker.convert(Object.assign({}, self), Promise.prototype);
+ 
+     // Return the promise, after casting it into a Worker and preserving props.
+     var returnVal = thenBase.call(selfPromise, onFulfilled, onRejected);
+     return Worker.convert(returnVal, self.__proto__);
+   };
+ 
+   Worker.prototype.thenExternal = function thenExternal(
+     onFulfilled,
+     onRejected
+   ) {
+     // Call `then` and return a standard promise (exits the Worker chain).
+     return Promise.prototype.then.call(this, onFulfilled, onRejected);
+   };
+ 
+   Worker.prototype.thenList = function thenList(fns) {
+     // Queue a series of promise 'factories' into the promise chain.
+     var self = this;
+     fns.forEach(function thenList_forEach(fn) {
+       self = self.thenCore(fn);
+     });
+     return self;
+   };
+ 
+   Worker.prototype["catch"] = function(onRejected) {
+     // Bind `this` to the promise handler, call `catch`, and return a Worker.
+     if (onRejected) {
+       onRejected = onRejected.bind(this);
+     }
+     var returnVal = Promise.prototype["catch"].call(this, onRejected);
+     return Worker.convert(returnVal, this);
+   };
+ 
+   Worker.prototype.catchExternal = function catchExternal(onRejected) {
+     // Call `catch` and return a standard promise (exits the Worker chain).
+     return Promise.prototype["catch"].call(this, onRejected);
+   };
+ 
+   Worker.prototype.error = function error(msg) {
+     // Throw the error in the Promise chain.
+     return this.then(function error_main() {
+       throw new Error(msg);
+     });
+   };
+ 
+   /* ----- ALIASES ----- */
+ 
+   Worker.prototype.using = Worker.prototype.set;
+   Worker.prototype.saveAs = Worker.prototype.save;
+   Worker.prototype.export = Worker.prototype.output;
+   Worker.prototype.run = Worker.prototype.then;
+ 
+   // Get dimensions of a PDF page, as determined by jsPDF.
+   jsPDF.getPageSize = function(orientation, unit, format) {
+     // Decode options object
+     if (typeof orientation === "object") {
+       var options = orientation;
+       orientation = options.orientation;
+       unit = options.unit || unit;
+       format = options.format || format;
+     }
+ 
+     // Default options
+     unit = unit || "mm";
+     format = format || "a4";
+     orientation = ("" + (orientation || "P")).toLowerCase();
+     var format_as_string = ("" + format).toLowerCase();
+ 
+     // Size in pt of various paper formats
+     var pageFormats = {
+       a0: [2383.94, 3370.39],
+       a1: [1683.78, 2383.94],
+       a2: [1190.55, 1683.78],
+       a3: [841.89, 1190.55],
+       a4: [595.28, 841.89],
+       a5: [419.53, 595.28],
+       a6: [297.64, 419.53],
+       a7: [209.76, 297.64],
+       a8: [147.4, 209.76],
+       a9: [104.88, 147.4],
+       a10: [73.7, 104.88],
+       b0: [2834.65, 4008.19],
+       b1: [2004.09, 2834.65],
+       b2: [1417.32, 2004.09],
+       b3: [1000.63, 1417.32],
+       b4: [708.66, 1000.63],
+       b5: [498.9, 708.66],
+       b6: [354.33, 498.9],
+       b7: [249.45, 354.33],
+       b8: [175.75, 249.45],
+       b9: [124.72, 175.75],
+       b10: [87.87, 124.72],
+       c0: [2599.37, 3676.54],
+       c1: [1836.85, 2599.37],
+       c2: [1298.27, 1836.85],
+       c3: [918.43, 1298.27],
+       c4: [649.13, 918.43],
+       c5: [459.21, 649.13],
+       c6: [323.15, 459.21],
+       c7: [229.61, 323.15],
+       c8: [161.57, 229.61],
+       c9: [113.39, 161.57],
+       c10: [79.37, 113.39],
+       dl: [311.81, 623.62],
+       letter: [612, 792],
+       "government-letter": [576, 756],
+       legal: [612, 1008],
+       "junior-legal": [576, 360],
+       ledger: [1224, 792],
+       tabloid: [792, 1224],
+       "credit-card": [153, 243]
+     };
+ 
+     var k;
+     // Unit conversion
+     switch (unit) {
+       case "pt":
+         k = 1;
+         break;
+       case "mm":
+         k = 72 / 25.4;
+         break;
+       case "cm":
+         k = 72 / 2.54;
+         break;
+       case "in":
+         k = 72;
+         break;
+       case "px":
+         k = 72 / 96;
+         break;
+       case "pc":
+         k = 12;
+         break;
+       case "em":
+         k = 12;
+         break;
+       case "ex":
+         k = 6;
+         break;
+       default:
+         throw "Invalid unit: " + unit;
+     }
+     var pageHeight = 0;
+     var pageWidth = 0;
+ 
+     // Dimensions are stored as user units and converted to points on output
+     if (pageFormats.hasOwnProperty(format_as_string)) {
+       pageHeight = pageFormats[format_as_string][1] / k;
+       pageWidth = pageFormats[format_as_string][0] / k;
+     } else {
+       try {
+         pageHeight = format[1];
+         pageWidth = format[0];
+       } catch (err) {
+         throw new Error("Invalid format: " + format);
+       }
+     }
+ 
+     var tmp;
+     // Handle page orientation
+     if (orientation === "p" || orientation === "portrait") {
+       orientation = "p";
+       if (pageWidth > pageHeight) {
+         tmp = pageWidth;
+         pageWidth = pageHeight;
+         pageHeight = tmp;
+       }
+     } else if (orientation === "l" || orientation === "landscape") {
+       orientation = "l";
+       if (pageHeight > pageWidth) {
+         tmp = pageWidth;
+         pageWidth = pageHeight;
+         pageHeight = tmp;
+       }
+     } else {
+       throw "Invalid orientation: " + orientation;
+     }
+ 
+     // Return information (k is the unit conversion ratio from pts)
+     var info = {
+       width: pageWidth,
+       height: pageHeight,
+       unit: unit,
+       k: k,
+       orientation: orientation
+     };
+     return info;
+   };
+ 
+   /**
+    * @typedef FontFace
+    *
+    * The font-face type implements an interface similar to that of the font-face CSS rule,
+    * and is used by jsPDF to match fonts when the font property of CanvasRenderingContext2D
+    * is updated.
+    *
+    * All properties expect values similar to those in the font-face CSS rule. A difference
+    * is the font-family, which do not need to be enclosed in double-quotes when containing
+    * spaces like in CSS.
+    *
+    * @property {string} family The name of the font-family.
+    * @property {string|undefined} style The style that this font-face defines, e.g. 'italic'.
+    * @property {string|number|undefined} weight The weight of the font, either as a string or a number (400, 500, 600, e.g.)
+    * @property {string|undefined} stretch The stretch of the font, e.g. condensed, normal, expanded.
+    * @property {Object[]} src A list of URLs from where fonts of various formats can be fetched.
+    * @property {string} [src] url A URL to a font of a specific format.
+    * @property {string} [src] format Format of the font referenced by the URL.
+    */
+ 
+   /**
+    * Generate a PDF from an HTML element or string using.
+    *
+    * @name html
+    * @function
+    * @param {HTMLElement|string} source The source HTMLElement or a string containing HTML.
+    * @param {Object} [options] Collection of settings
+    * @param {function} [options.callback] The mandatory callback-function gets as first parameter the current jsPDF instance
+    * @param {(number|number[])=} [options.margin] Page margins [top, right, bottom, left]. Default is 0.
+    * @param {(boolean|'slice'|'text')=} [options.autoPaging] The auto paging mode.
+    * <ul>
+    * <li>
+    *   <code>false</code>: Auto paging is disabled.
+    * </li>
+    * <li>
+    *   <code>true</code> or <code>'slice'</code>: Will cut shapes or text chunks across page breaks. Will possibly
+    *   slice text in half, making it difficult to read.
+    * </li>
+    * <li>
+    *   <code>'text'</code>: Trys not to cut text in half across page breaks. Works best for documents consisting
+    *   mostly of a single column of text.
+    * </li>
+    * </ul>
+    * Default is <code>true</code>.
+    * @param {string} [options.filename] name of the file
+    * @param {HTMLOptionImage} [options.image] image settings when converting HTML to image
+    * @param {Html2CanvasOptions} [options.html2canvas] html2canvas options
+    * @param {FontFace[]} [options.fontFaces] A list of font-faces to match when resolving fonts. Fonts will be added to the PDF based on the specified URL. If omitted, the font match algorithm falls back to old algorithm.
+    * @param {jsPDF} [options.jsPDF] jsPDF instance
+    * @param {number=} [options.x] x position on the PDF document in jsPDF units.
+    * @param {number=} [options.y] y position on the PDF document in jsPDF units.
+    * @param {number=} [options.width] The target width in the PDF document in jsPDF units. The rendered element will be
+    * scaled such that it fits into the specified width. Has no effect if either the <code>html2canvas.scale<code> is
+    * specified or the <code>windowWidth</code> option is NOT specified.
+    * @param {number=} [options.windowWidth] The window width in CSS pixels. In contrast to the
+    * <code>html2canvas.windowWidth</code> option, this option affects the actual container size while rendering and
+    * does NOT affect CSS media queries. This option only has an effect, if the <code>width<code> option is also specified.
+    *
+    * @example
+    * var doc = new jsPDF();
+    *
+    * doc.html(document.body, {
+    *    callback: function (doc) {
+    *      doc.save();
+    *    },
+    *    x: 10,
+    *    y: 10
+    * });
+    */
+   jsPDFAPI.html = function(src, options) {
+ 
+     options = options || {};
+     options.callback = options.callback || function() {};
+     options.html2canvas = options.html2canvas || {};
+     options.html2canvas.canvas = options.html2canvas.canvas || this.canvas;
+     options.jsPDF = options.jsPDF || this;
+     options.fontFaces = options.fontFaces
+       ? options.fontFaces.map(normalizeFontFace)
+       : null;
+ 
+     // Create a new worker with the given options.
+     var worker = new Worker(options);
+ 
+     if (!options.worker) {
+       // If worker is not set to true, perform the traditional 'simple' operation.
+       return worker.from(src).doCallback();
+     } else {
+       // Otherwise, return the worker for new Promise-based operation.
+       return worker;
+     }
+   };
+ })(jsPDF.API);
 
 /**
  * @license
@@ -32333,7 +32398,7 @@ var CompoundGlyph = (function() {
     MORE_COMPONENTS,
     WE_HAVE_AN_X_AND_Y_SCALE,
     WE_HAVE_A_SCALE,
-    WE_HAVE_A_TWO_BY_TWO;
+    WE_HAVE_A_TWO_BY_TWO;
   ARG_1_AND_2_ARE_WORDS = 0x0001;
   WE_HAVE_A_SCALE = 0x0008;
   MORE_COMPONENTS = 0x0020;
