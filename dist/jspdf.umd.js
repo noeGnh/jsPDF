@@ -1,7 +1,7 @@
 /** @license
  *
  * jsPDF - PDF Document creation from JavaScript
- * Version 2.4.0 Built on 2021-12-08T13:13:23.304Z
+ * Version 2.5.0 Built on 2022-01-04T19:04:25.752Z
  *                      CommitID 00000000
  *
  * Copyright (c) 2010-2021 James Hall <james@parall.ax>, https://github.com/MrRio/jsPDF
@@ -5584,6 +5584,19 @@
     var lineWidth = options.lineWidth || 0.200025; // 2mm
 
     /**
+     * Gets the line width, default: 0.200025.
+     *
+     * @function
+     * @instance
+     * @returns {number} lineWidth
+     * @memberof jsPDF#
+     * @name getLineWidth
+     */
+
+    var getLineWidth = API.__private__.getLineWidth = API.getLineWidth = function () {
+      return lineWidth;
+    };
+    /**
      * Sets line width for upcoming lines.
      *
      * @param {number} width Line width (in units declared at inception of PDF document).
@@ -5594,7 +5607,9 @@
      * @name setLineWidth
      */
 
+
     var setLineWidth = API.__private__.setLineWidth = API.setLineWidth = function (width) {
+      lineWidth = width;
       out(hpf(scale(width)) + " w");
       return this;
     };
@@ -6531,6 +6546,7 @@
       getTextColor: getTextColor,
       getLineHeight: getLineHeight,
       getLineHeightFactor: getLineHeightFactor,
+      getLineWidth: getLineWidth,
       write: write,
       getHorizontalCoordinate: getHorizontalCoordinate,
       getVerticalCoordinate: getVerticalCoordinate,
@@ -6645,7 +6661,7 @@
    * @memberof jsPDF#
    */
 
-  jsPDF.version = "2.4.0";
+  jsPDF.version = "2.5.0";
 
   var jsPDFAPI = jsPDF.API;
   var scaleFactor = 1;
